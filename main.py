@@ -37,7 +37,7 @@ def show_image(image, title):
 
 # Pipeline de traitement
 image = load_image(input_image_path)
-show_image(image, "Image originale")
+show_image(image, "Image_originale")
 
 image_eq = histogram_equalization(image)
 show_image(image_eq, "Image après égalisation de l'histogramme")
