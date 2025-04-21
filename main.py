@@ -2,101 +2,72 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-def load_image(image_path):
-    image = cv2.imread(image_path)
-    if image is None:
-        raise FileNotFoundError(f"L'image {image_path} est introuvable.")
-    return image
+# === Fonctions outils ===
 
-def adjust_gamma(image, gamma=0.92):
-    invGamma = 1.0 / gamma
-    table = np.array([((i / 255.0) ** invGamma) * 255
-        for i in np.arange(0, 256)]).astype("uint8")
-    return cv2.LUT(image, table)
-
-def enhance_contrast(image):
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+def apply_clahe(img, clip_limit=4.0):
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-    cl = clahe.apply(l)
-    limg = cv2.merge((cl,a,b))
-    return cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+    l_clahe = clahe.apply(l)
+    lab_clahe = cv2.merge((l_clahe, a, b))
+    return cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
 
-def adaptive_brightness(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-    
-    target_brightness = 70
-    current_brightness = np.mean(v)
-    gain = target_brightness / (current_brightness + 1e-7)
+def estimate_gamma(img_gray):
+    # Moyenne de l'intensité → gamma inversement proportionnel
+    mean_intensity = np.mean(img_gray)
+    gamma = 1.0 if mean_intensity == 0 else np.clip(128 / mean_intensity, 0.5, 2.5)
+    return gamma
 
-    v = cv2.multiply(v, min(gain, 3.0))
-    s = cv2.multiply(s, 0.95)  # Réduction légère de saturation
-    final_hsv = cv2.merge((h, s, v))
-    return cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
+def adjust_gamma(img, gamma):
+    look_up = np.array([((i / 255.0) ** gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    return cv2.LUT(img, look_up)
 
-def denoise(image):
-    return cv2.fastNlMeansDenoisingColored(image, None, 6, 6, 7, 15)
+def normalize_brightness(img):
+    # Étalonne l’histogramme par canal
+    img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+    img_yuv[:, :, 0] = cv2.equalizeHist(img_yuv[:, :, 0])
+    return cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
 
-def sharpen(image):
-    kernel = np.array([[0, -1, 0],
-                       [-1, 5,-1],
-                       [0, -1, 0]])
-    return cv2.filter2D(image, -1, kernel)
+# === Pipeline principal ===
 
-# === AJOUT : Égalisation globale de l'histogramme ===
-def equalize_global_histogram(image):
-    ycrcb = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
-    y, cr, cb = cv2.split(ycrcb)
-    y_eq = cv2.equalizeHist(y)
-    ycrcb_eq = cv2.merge((y_eq, cr, cb))
-    return cv2.cvtColor(ycrcb_eq, cv2.COLOR_YCrCb2BGR)
+# Charger l'image
+image = cv2.imread("test\ChatGPT Image 20 avr. 2025, 18_55_40.png")
+if image is None:
+    print("Erreur : Image non chargée. Vérifiez le chemin.")
+else:
+    # 1. Amélioration locale du contraste (CLAHE)
+    clahe_img = apply_clahe(image)
 
-# === AJOUT : Seuillage d'Otsu (pour affichage/visualisation uniquement) ===
-def otsu_threshold(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return thresh
+    # 2. Dénuage avec filtre bilatéral (préserve les bords)
+    denoised = cv2.bilateralFilter(clahe_img, d=9, sigmaColor=75, sigmaSpace=75)
 
-def show_image(image, title, cmap=None):
-    if len(image.shape) == 2:
-        plt.imshow(image, cmap=cmap or 'gray')
-    else:
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        plt.imshow(image_rgb)
-    plt.title(title)
+    # 3. Gamma dynamique
+    gray = cv2.cvtColor(denoised, cv2.COLOR_BGR2GRAY)
+    gamma = estimate_gamma(gray)
+    gamma_corrected = adjust_gamma(denoised, gamma)
+
+    # 4. Normalisation de la luminosité
+    normalized = normalize_brightness(gamma_corrected)
+
+    # 5. Renforcement des détails
+    gaussian = cv2.GaussianBlur(normalized, (0, 0), 3)
+    sharpened = cv2.addWeighted(normalized, 1.2, gaussian, -0.2, 0)
+
+    # === Affichage et sauvegarde ===
+       # === Affichage côte à côte : avant et après amélioration ===
+    plt.figure(figsize=(12, 6))
+
+    # Image originale
+    plt.subplot(1, 2, 1)
+    plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    plt.title("Image originale")
     plt.axis('off')
+
+    # Image améliorée
+    plt.subplot(1, 2, 2)
+    plt.imshow(cv2.cvtColor(sharpened, cv2.COLOR_BGR2RGB))
+    plt.title("Image améliorée")
+    plt.axis('off')
+
+    plt.tight_layout()
     plt.show()
-
-# Pipeline complet
-image = load_image('test/i3.jpg')
-show_image(image, "Image originale")
-
-# 1. Contraste
-image_contrast = enhance_contrast(image)
-
-# 2. Gamma
-image_gamma = adjust_gamma(image_contrast, gamma=0.92)
-
-# 3. Luminosité adaptative
-image_brightness = adaptive_brightness(image_gamma)
-
-# 4. Débruitage
-image_denoised = denoise(image_brightness)
-
-# 5. Sharpen final
-image_final = sharpen(image_denoised)
-
-# === Égalisation globale d'histogramme (optionnelle) ===
-image_hist_eq = equalize_global_histogram(image_final)
-show_image(image_hist_eq, "Après égalisation globale de l'histogramme")
-
-# === Seuillage d’Otsu (visualisation) ===
-image_otsu = otsu_threshold(image_final)
-show_image(image_otsu, "Seuillage d'Otsu", cmap='gray')
-
-# Affichage final
-show_image(image_final, "Image finale améliorée")
-cv2.imwrite("sortie/image_amelioree.jpg", image_final)
-cv2.imwrite("sortie/image_hist_eq.jpg", image_hist_eq)
-cv2.imwrite("sortie/image_otsu.jpg", image_otsu)
